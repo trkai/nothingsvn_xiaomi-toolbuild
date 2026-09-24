@@ -65,13 +65,12 @@ jobs:
         run: |
           sudo bash packROM.sh
 
-      - name: Setup Rclone...
+      - name: Upload ROM to Gofile
+        env:
+          GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }} # Tùy chọn: Thêm token Gofile nếu muốn file không bị xóa
         run: |
-          sudo -E bash uploadROM.sh setup "${{ secrets.GH_TOKEN }}" "${{ secrets.GH_REPO }}" "${{ secrets.RCLONE_TOKEN_PATH }}"
-          
-      - name: Upload ROM...
-        run: |
-          sudo -E bash uploadROM.sh
+          sudo apt-get install -y jq curl
+          bash uploadROM.sh
       
       - name: Update Database and Notificaton to Telegram
         env:
