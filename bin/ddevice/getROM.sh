@@ -2,61 +2,66 @@
 
 baserom="$1"
 work_dir=$(pwd)
-source $work_dir/functions.sh
-# Check whether it is a local package or a link
-if [ ! -f "${baserom}" ] && [ "$(echo $baserom |grep http)" != "" ]; then
+mkdir -p "$work_dir/bin/ddevice"
+source "$work_dir/functions.sh" 2>/dev/null || true
+
+# 1. Xử lý tải ROM nếu đầu vào là link URL
+if [[ ! -f "${baserom}" ]] && echo "${baserom}" | grep -qE "http://|https://"; then
     info "Download link detected, starting a download..."
-    aria2c --max-download-limit=1024M --file-allocation=none -s10 -x10 -j10 ${baserom}
-    baserom=$(basename ${baserom} | sed 's/\?t.*//')
-    if [ -f $work_dir/topaz-ota_full-OS3.0.2.0.WMGCNXM-user-16.0-b487e82659.zip ]; then
-        baserom="topaz-ota_full-OS3.0.2.0.WMGCNXM-user-16.0-b487e82659.zip"
-        info "BASEROM: ${baserom}"
-    elif [ -f $work_dir/munch-ota_full-OS2.0.215.0.VLMCNXM-user-15.0-7df6d5ee94.zip ]; then
-        baserom="munch-ota_full-OS2.0.215.0.VLMCNXM-user-15.0-7df6d5ee94.zip"
-        info "BASEROM: ${baserom}"
-    elif [ ! -f "${baserom}" ]; then
-        error "Download error!"
+    # Lấy tên file chuẩn, loại bỏ các tham số URL đằng sau dấu ?
+    filename=$(basename "${baserom}" | cut -d '?' -f 1)
+    aria2c --max-download-limit=1024M --file-allocation=none -s10 -x10 -j10 -o "$filename" "${baserom}"
+    baserom="$filename"
+
+    if [[ ! -f "${baserom}" ]]; then
+        error "Download error: File not found!"
+        exit 1
     fi
-elif [ -f "${baserom}" ]; then
-    info "BASEROM: ${baserom}"
+    info "BASEROM downloaded: ${baserom}"
+elif [[ -f "${baserom}" ]]; then
+    info "BASEROM local file: ${baserom}"
 else
-    error "BASEROM: Invalid parameter"
-    exit
+    error "BASEROM: Invalid parameter or file not found!"
+    exit 1
 fi
 
+rom_filename=$(basename "$baserom")
 
-# Get ROM Info
-if [ "$(echo $baserom |grep miui_)" != "" ]; then
-    device_code=$(basename $baserom |cut -d '_' -f 2)
-    base_rom_code=$(echo "$baserom" | awk -F'_' '{print $3}')
-elif [ "$(echo $baserom |grep xiaomi.eu_)" != "" ]; then
-    device_code=$(basename $baserom |cut -d '_' -f 3)
-    base_rom_code=$(echo "$baserom" | awk -F'_' '{print $3}')
-elif [ "$(echo $baserom | grep -E '.*-ota_full-.*')" != "" ]; then
-    device_code=$(basename $baserom | cut -d '-' -f 1)
-    base_rom_code=$(basename $baserom | cut -d '-' -f 3)
-
-    # Transform device_code
-    device_code=$(echo $device_code | awk -F '_' '{
-        if (NF == 1) {
-            # If one part, e.g., shennong
-            print toupper($1)
-        } else if (NF == 2) {
-            # If two parts, e.g., tapas_global
-            print toupper($1) toupper(substr($2, 1, 1)) substr($2, 2)
-        } else if (NF == 3) {
-            # If three parts, e.g., houji_tw_global
-            printf toupper($1) toupper($2) toupper(substr($3, 1, 1)) substr($3, 2)
-        }
-    }')
+# 2. Phân tích tên thiết bị (device_code) và mã phiên bản (base_rom_code)
+if echo "$rom_filename" | grep -q "miui_"; then
+    # Mẫu: miui_DEVICE_VERSION_HASH_ANDROID.zip
+    device_code=$(echo "$rom_filename" | cut -d '_' -f 2)
+    base_rom_code=$(echo "$rom_filename" | cut -d '_' -f 3)
+elif echo "$rom_filename" | grep -q "xiaomi.eu_"; then
+    # Mẫu: xiaomi.eu_multi_DEVICE_VERSION_HASH.zip
+    device_code=$(echo "$rom_filename" | cut -d '_' -f 3)
+    base_rom_code=$(echo "$rom_filename" | cut -d '_' -f 4)
+elif echo "$rom_filename" | grep -qE '.*-ota_full-.*'; then
+    # Mẫu: DEVICE-ota_full-VERSION-...zip
+    device_code=$(echo "$rom_filename" | cut -d '-' -f 1)
+    base_rom_code=$(echo "$rom_filename" | cut -d '-' -f 3)
 else
-    device_code="YourDevice"
-    base_rom_code="Unknown"
+    # Tìm kiếm chuỗi version trực tiếp qua regex nếu định dạng file lạ
+    base_rom_code=$(echo "$rom_filename" | grep -oE "(OS[0-9]+(\.[0-9]+)+[\.A-Z0-9]*|V[0-9]+(\.[0-9]+)+[\.A-Z0-9]*)" | head -1)
+    device_code=$(echo "$rom_filename" | cut -d '_' -f 1 | cut -d '-' -f 1)
+    [[ -z "$base_rom_code" ]] && base_rom_code="Unknown"
+    [[ -z "$device_code" ]] && device_code="YourDevice"
 fi
 
-device_f=$(echo $device_code | sed 's/\(Global\|EEAGlobal\|INGlobal\|IDGlobal\|RUGlobal\|TWGlobal\|TRGlobal\|JPGlobal\)$//' | tr '[:upper:]' '[:lower:]')
+# Chuẩn hóa định dạng device_code
+device_code=$(echo "$device_code" | awk -F '_' '{
+    if (NF == 1) {
+        print toupper($1)
+    } else if (NF == 2) {
+        print toupper($1) toupper(substr($2, 1, 1)) substr($2, 2)
+    } else if (NF >= 3) {
+        printf toupper($1) toupper($2) toupper(substr($3, 1, 1)) substr($3, 2)
+    }
+}')
 
-# Determine Device Type
+device_f=$(echo "$device_code" | sed 's/\(Global\|EEAGlobal\|INGlobal\|IDGlobal\|RUGlobal\|TWGlobal\|TRGlobal\|JPGlobal\)$//' | tr '[:upper:]' '[:lower:]')
+
+# 3. Xác định loại thị trường thiết bị
 info "Get Device Type"
 if echo "$device_code" | grep -q 'EEAGlobal'; then
     DEVICE_TYPE="EEAGlobal"
@@ -78,28 +83,34 @@ else
     DEVICE_TYPE="China"
 fi
 
-#Check MIUI or Hyper
-if echo "$base_rom_code" | grep -q "OS1"; then
-    ROM_OS="OS1"
-elif echo "$base_rom_code" | grep -q "OS2"; then
-    ROM_OS="OS2"
-elif echo "$base_rom_code" | grep -q "OS3"; then
-    ROM_OS="OS3"
-elif echo "$base_rom_code" | grep -q "OS4"; then
-    ROM_OS="OS4"
-elif echo "$base_rom_code" | grep -q "V14"; then
+# 4. Kiểm tra và nhận diện hệ điều hành (Hỗ trợ linh hoạt từ OS1 tới OS9 và Android 17)
+if [[ "$base_rom_code" =~ (OS[0-9]+) ]]; then
+    ROM_OS="${BASH_REMATCH[1]}"
+elif [[ "$rom_filename" =~ (OS[0-9]+) ]]; then
+    ROM_OS="${BASH_REMATCH[1]}"
+    [[ "$base_rom_code" == "Unknown" ]] && base_rom_code="${BASH_REMATCH[1]}"
+elif echo "$base_rom_code" | grep -qE "V12|V13|V14|V15"; then
     ROM_OS="MIUI"
-elif echo "$base_rom_code" | grep -q "V13"; then
+elif echo "$rom_filename" | grep -qE "V12|V13|V14|V15"; then
     ROM_OS="MIUI"
 else
-    echo "Unsupport ROM Exiting..."
-    exit 1
+    # Fallback dự phòng: Nếu không phát hiện chuỗi trong tên, thử kiểm tra payload.bin
+    if unzip -l "$baserom" 2>/dev/null | grep -q "payload.bin"; then
+        warn "Không đọc được version từ tên file, nhưng tìm thấy payload.bin. Tiếp tục build..."
+        ROM_OS="OS3"
+        base_rom_code="AutoDetected"
+    else
+        echo "Unsupport ROM Exiting..."
+        exit 1
+    fi
 fi
 
-echo $base_rom_code > $work_dir/bin/ddevice/base_rom_code.txt
-echo $base_rom_code > $work_dir/bin/ddevice/os_code.txt
-echo $device_code > $work_dir/bin/ddevice/device_code.txt
-echo $DEVICE_TYPE > $work_dir/bin/ddevice/device_type.txt
-echo $ROM_OS > $work_dir/bin/ddevice/rom_os.txt
+# 5. Lưu thông tin ra file cho các bước tiếp theo
+echo "$base_rom_code" > "$work_dir/bin/ddevice/base_rom_code.txt"
+echo "$base_rom_code" > "$work_dir/bin/ddevice/os_code.txt"
+echo "$device_code"   > "$work_dir/bin/ddevice/device_code.txt"
+echo "$device_f"      > "$work_dir/bin/ddevice/device_f.txt"
+echo "$DEVICE_TYPE"   > "$work_dir/bin/ddevice/device_type.txt"
+echo "$ROM_OS"        > "$work_dir/bin/ddevice/rom_os.txt"
 
-
+info "Nhận diện thành công: Device=$device_code | Region=$DEVICE_TYPE | OS=$ROM_OS | Code=$base_rom_code"
