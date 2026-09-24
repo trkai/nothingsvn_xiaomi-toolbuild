@@ -6,15 +6,19 @@ on:
       input_url:
         description: 'URL of the ROM to build'
         required: true
-      
+
 jobs:
-  Initialize:
+  Build:
     runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TG_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }}
     steps:
       - name: Clean All Unused file,application
         run: |
-          docker rmi `docker images -q` || true
-          sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/sudo apt/sources.list.d || true
+          docker rmi `docker images -q` 2>/dev/null || true
+          sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php || true
           sudo apt -y purge azure-cli ghc* zulu* hhvm llvm* firefox google* dotnet* powershell mysql* php* || true
           sudo apt -y autoremove --purge || true
           sudo apt -y autoclean || true
@@ -31,13 +35,9 @@ jobs:
 
       - name: Set up Time
         run: |
-          echo "Setting Vienam timezone"
+          echo "Setting Vietnam timezone"
           sudo timedatectl set-timezone Asia/Ho_Chi_Minh
 
-  Build:
-    needs: Initialize
-    runs-on: ubuntu-latest
-    steps:
       - name: Install OpenJDK
         uses: actions/setup-java@v5
         with:
@@ -49,31 +49,118 @@ jobs:
 
       - name: Install Stuff
         run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
           sudo bash setup.sh
         
       - name: Giving permission
         run: |
           sudo chmod 777 -R *
 
+      # Script trợ giúp tạo template tin nhắn và gọi API Telegram
+      - name: Setup Telegram Notify Helper
+        run: |
+          cat << 'EOF' > /tmp/tg_send.sh
+          #!/bin/bash
+          STATUS_CODE="$1"
+          ROM_URL="$2"
+          DL_URL="$3"
+
+          BUILD_ID="${TELEGRAM_BUILD_ID:-xiaomi_${GITHUB_RUN_ID}}"
+          VERSION_TOOL=$(cat Version 2>/dev/null || echo "BugOS 1.1")
+          DEVICE_CODE=$(cat bin/ddevice/device_code.txt 2>/dev/null || echo "ANNIBALE")
+          DEVICE_NAME=$(cat bin/ddevice/name_devices.txt 2>/dev/null | cut -d '|' -f 1 | xargs)
+          [[ -z "$DEVICE_NAME" ]] && DEVICE_NAME=$(cat bin/ddevice/device_name.txt 2>/dev/null || echo "Xiaomi Device")
+
+          ROM_OS=$(cat bin/ddevice/rom_os.txt 2>/dev/null)
+          BASE_CODE=$(cat bin/ddevice/base_rom_code.txt 2>/dev/null)
+          if [[ -n "$ROM_OS" && -n "$BASE_CODE" ]]; then
+              if [[ "$BASE_CODE" == *"$ROM_OS"* ]]; then
+                  OS_VER="$BASE_CODE"
+              else
+                  OS_VER="${ROM_OS} (${BASE_CODE})"
+              fi
+          elif [[ -n "$BASE_CODE" ]]; then
+              OS_VER="$BASE_CODE"
+          elif [[ -n "$ROM_OS" ]]; then
+              OS_VER="$ROM_OS"
+          else
+              OS_VER="Không rõ bản dựng"
+          fi
+
+          case "$STATUS_CODE" in
+              start)    PROGRESS="[ 5% ]" ;;
+              build)    PROGRESS="[ 55% ]" ;;
+              pack)     PROGRESS="[ 75% ]" ;;
+              upload)   PROGRESS="[ 95% ]" ;;
+              success)  PROGRESS="✅ Hoàn tất" ;;
+              fail)     PROGRESS="❌ Thất bại" ;;
+              *)        PROGRESS="[ $STATUS_CODE ]" ;;
+          esac
+
+          TEXT="👾 TIẾN TRÌNH BUILD ROM
+          ━━━━━━━━━━━━━━━━━━
+          👤 Người thực hiện: iabi
+          🛠 Phiên bản: ${VERSION_TOOL}
+          📱 Device: ${DEVICE_NAME}
+          📍 Codename: ${DEVICE_CODE}
+          💿 Hệ điều hành: ${OS_VER}
+          ━━━━━━━━━━━━━━━━━━
+          📈 Tiến trình: ${PROGRESS}
+          🆔 Build ID: ${BUILD_ID}
+          🔗 Base ROM (Nguồn): <a href='${ROM_URL}'>Link</a>"
+
+          DATA_ARGS=(
+              -d chat_id="${TELEGRAM_CHAT_ID}"
+              -d parse_mode="HTML"
+              -d disable_web_page_preview="true"
+              --data-urlencode "text=${TEXT}"
+          )
+
+          if [[ "$STATUS_CODE" == "success" && -n "$DL_URL" ]]; then
+              KEYBOARD=$(jq -nc --arg dl "$DL_URL" '{inline_keyboard:[[{text:"⬇️ Tải ROM (Gofile.io)",url:$dl}]]}')
+              DATA_ARGS+=(--data-urlencode "reply_markup=${KEYBOARD}")
+          fi
+
+          if [[ -n "$TELEGRAM_MSG_ID" && "$STATUS_CODE" != "success" ]]; then
+              curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText" \
+                  -d message_id="${TELEGRAM_MSG_ID}" "${DATA_ARGS[@]}" > /dev/null
+          else
+              RES=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" "${DATA_ARGS[@]}")
+              NEW_ID=$(echo "$RES" | jq -r '.result.message_id // empty')
+              if [[ -n "$NEW_ID" && "$STATUS_CODE" != "success" ]]; then
+                  echo "TELEGRAM_MSG_ID=${NEW_ID}" >> $GITHUB_ENV
+              fi
+          fi
+          EOF
+          chmod +x /tmp/tg_send.sh
+
+      - name: Telegram - Báo bắt đầu
+        run: /tmp/tg_send.sh "start" "${{ inputs.input_url }}"
+
       - name: Build ROM...
         env:
           INPUT_URL: ${{ inputs.input_url }}
         run: |
+          /tmp/tg_send.sh "build" "$INPUT_URL"
           sudo bash build.sh "$INPUT_URL"
 
       - name: Pack ROM...
         run: |
+          /tmp/tg_send.sh "pack" "${{ inputs.input_url }}"
           sudo bash packROM.sh
 
       - name: Upload ROM to Gofile
-        env:
-          GOFILE_TOKEN: ${{ secrets.GOFILE_TOKEN }} # Tùy chọn: Thêm token Gofile nếu muốn file không bị xóa
         run: |
-          sudo apt-get install -y jq curl
-          bash uploadROM.sh
-      
-      - name: Update Database and Notificaton to Telegram
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TG_TOKEN }}
+          /tmp/tg_send.sh "upload" "${{ inputs.input_url }}"
+          sudo -E bash uploadROM.sh
+
+      - name: Update Database and Notification to Telegram (Success)
+        if: success()
         run: |
-          
+          /tmp/tg_send.sh "success" "${{ inputs.input_url }}" "${GOFILE_LINK}"
+
+      - name: Update Database and Notification to Telegram (Fail)
+        if: failure()
+        run: |
+          /tmp/tg_send.sh "fail" "${{ inputs.input_url }}"
