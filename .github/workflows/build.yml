@@ -17,11 +17,10 @@ jobs:
     steps:
       - name: Clean All Unused file,application
         run: |
-          docker rmi `docker images -q` 2>/dev/null || true
+          docker rmi $(docker images -q) 2>/dev/null || true
           sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php || true
           sudo apt -y purge azure-cli ghc* zulu* hhvm llvm* firefox google* dotnet* powershell mysql* php* || true
           sudo apt -y autoremove --purge || true
-          sudo apt -y autoclean || true
           sudo apt clean || true
 
       - name: Maximize build space
@@ -57,16 +56,16 @@ jobs:
         run: |
           sudo chmod 777 -R *
 
-      # Script trợ giúp tạo template tin nhắn và gọi API Telegram
+      # Luôn tạo script helper ngay đầu và không bao giờ bị mất
       - name: Setup Telegram Notify Helper
         run: |
-          cat << 'EOF' > /tmp/tg_send.sh
+          cat << 'EOF' > ./tg_send.sh
           #!/bin/bash
           STATUS_CODE="$1"
           ROM_URL="$2"
           DL_URL="$3"
 
-          BUILD_ID="${TELEGRAM_BUILD_ID:-xiaomi_${GITHUB_RUN_ID}}"
+          BUILD_ID="${TELEGRAM_BUILD_ID:-${GITHUB_RUN_ID}}"
           VERSION_TOOL=$(cat Version 2>/dev/null || echo "BugOS 1.1")
           DEVICE_CODE=$(cat bin/ddevice/device_code.txt 2>/dev/null || echo "ANNIBALE")
           DEVICE_NAME=$(cat bin/ddevice/name_devices.txt 2>/dev/null | cut -d '|' -f 1 | xargs)
@@ -133,34 +132,36 @@ jobs:
               fi
           fi
           EOF
-          chmod +x /tmp/tg_send.sh
+          chmod +x ./tg_send.sh
 
       - name: Telegram - Báo bắt đầu
-        run: /tmp/tg_send.sh "start" "${{ inputs.input_url }}"
+        run: ./tg_send.sh "start" "${{ inputs.input_url }}"
 
       - name: Build ROM...
         env:
           INPUT_URL: ${{ inputs.input_url }}
         run: |
-          /tmp/tg_send.sh "build" "$INPUT_URL"
+          ./tg_send.sh "build" "$INPUT_URL"
           sudo bash build.sh "$INPUT_URL"
 
       - name: Pack ROM...
         run: |
-          /tmp/tg_send.sh "pack" "${{ inputs.input_url }}"
+          ./tg_send.sh "pack" "${{ inputs.input_url }}"
           sudo bash packROM.sh
 
       - name: Upload ROM to Gofile
         run: |
-          /tmp/tg_send.sh "upload" "${{ inputs.input_url }}"
+          ./tg_send.sh "upload" "${{ inputs.input_url }}"
           sudo -E bash uploadROM.sh
 
       - name: Update Database and Notification to Telegram (Success)
         if: success()
         run: |
-          /tmp/tg_send.sh "success" "${{ inputs.input_url }}" "${GOFILE_LINK}"
+          ./tg_send.sh "success" "${{ inputs.input_url }}" "${GOFILE_LINK}"
 
       - name: Update Database and Notification to Telegram (Fail)
         if: failure()
         run: |
-          /tmp/tg_send.sh "fail" "${{ inputs.input_url }}"
+          if [ -f "./tg_send.sh" ]; then
+            ./tg_send.sh "fail" "${{ inputs.input_url }}"
+          fi
