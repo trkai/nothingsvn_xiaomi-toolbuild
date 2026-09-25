@@ -51,85 +51,209 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl
           sudo bash setup.sh
-        
+
       - name: Giving permission
         run: |
           sudo chmod 777 -R *
 
-      # Luôn tạo script helper ngay đầu và không bao giờ bị mất
       - name: Setup Telegram Notify Helper
         run: |
-          cat << 'EOF' > ./tg_send.sh
+          cat > ./tg_send.sh << 'EOF'
           #!/bin/bash
-          STATUS_CODE="$1"
-          ROM_URL="$2"
-          DL_URL="$3"
+          set -u
 
-          BUILD_ID="${TELEGRAM_BUILD_ID:-${GITHUB_RUN_ID}}"
+          STATUS_CODE="${1:-}"
+          ROM_URL="${2:-}"
+          DL_URL="${3:-}"
+
+          html_esc() {
+            printf '%s' "${1:-}" | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g'
+          }
+
+          bar_for() {
+            local pct="${1:-0}"
+            local n=$(( (pct + 5) / 10 ))
+            [ "$n" -gt 10 ] && n=10
+            [ "$n" -lt 0 ] && n=0
+            local i=0 out=""
+            while [ "$i" -lt 10 ]; do
+              if [ "$i" -lt "$n" ]; then out="${out}▰"; else out="${out}▱"; fi
+              i=$((i + 1))
+            done
+            printf '%s' "$out"
+          }
+
+          BUILD_ID="${TELEGRAM_BUILD_ID:-xiaomi_${GITHUB_RUN_ID:-local}}"
           VERSION_TOOL=$(cat Version 2>/dev/null || echo "BugOS 1.1")
-          DEVICE_CODE=$(cat bin/ddevice/device_code.txt 2>/dev/null || echo "ANNIBALE")
-          DEVICE_NAME=$(cat bin/ddevice/name_devices.txt 2>/dev/null | cut -d '|' -f 1 | xargs)
-          [[ -z "$DEVICE_NAME" ]] && DEVICE_NAME=$(cat bin/ddevice/device_name.txt 2>/dev/null || echo "Xiaomi Device")
+          DEVICE_CODE=$(cat bin/ddevice/device_code.txt 2>/dev/null || true)
+          DEVICE_NAME=$(cat bin/ddevice/name_devices.txt 2>/dev/null | cut -d '|' -f 1 | xargs || true)
+          [[ -z "${DEVICE_NAME:-}" ]] && DEVICE_NAME=$(cat bin/ddevice/device_name.txt 2>/dev/null || true)
 
-          ROM_OS=$(cat bin/ddevice/rom_os.txt 2>/dev/null)
-          BASE_CODE=$(cat bin/ddevice/base_rom_code.txt 2>/dev/null)
-          if [[ -n "$ROM_OS" && -n "$BASE_CODE" ]]; then
-              if [[ "$BASE_CODE" == *"$ROM_OS"* ]]; then
-                  OS_VER="$BASE_CODE"
-              else
-                  OS_VER="${ROM_OS} (${BASE_CODE})"
-              fi
-          elif [[ -n "$BASE_CODE" ]]; then
+          ROM_OS=$(cat bin/ddevice/rom_os.txt 2>/dev/null || true)
+          BASE_CODE=$(cat bin/ddevice/base_rom_code.txt 2>/dev/null || true)
+          if [[ -n "${ROM_OS:-}" && -n "${BASE_CODE:-}" ]]; then
+            if [[ "$BASE_CODE" == *"$ROM_OS"* ]]; then
               OS_VER="$BASE_CODE"
-          elif [[ -n "$ROM_OS" ]]; then
-              OS_VER="$ROM_OS"
+            else
+              OS_VER="${ROM_OS} (${BASE_CODE})"
+            fi
+          elif [[ -n "${BASE_CODE:-}" ]]; then
+            OS_VER="$BASE_CODE"
+          elif [[ -n "${ROM_OS:-}" ]]; then
+            OS_VER="$ROM_OS"
           else
-              OS_VER="Không rõ bản dựng"
+            OS_VER=""
           fi
+
+          DEVICE_PENDING=""
+          if [[ -z "${DEVICE_CODE:-}" && -z "${DEVICE_NAME:-}" ]]; then
+            DEVICE_PENDING=1
+            DEVICE_CODE="—"
+            DEVICE_NAME="Đang nhận diện"
+          fi
+          [[ -z "${DEVICE_NAME:-}" ]] && DEVICE_NAME="Xiaomi"
+          [[ -z "${DEVICE_CODE:-}" ]] && DEVICE_CODE="unknown"
+          [[ -z "${OS_VER:-}" ]] && OS_VER="Đang đọc bản dựng…"
 
           case "$STATUS_CODE" in
-              start)    PROGRESS="[ 5% ]" ;;
-              build)    PROGRESS="[ 55% ]" ;;
-              pack)     PROGRESS="[ 75% ]" ;;
-              upload)   PROGRESS="[ 95% ]" ;;
-              success)  PROGRESS="✅ Hoàn tất" ;;
-              fail)     PROGRESS="❌ Thất bại" ;;
-              *)        PROGRESS="[ $STATUS_CODE ]" ;;
+            start)
+              PCT=8; ICON="⏳"; TITLE="Khởi động pipeline"
+              HINT="Dọn môi trường, cài toolchain…"
+              ;;
+            build)
+              PCT=55; ICON="🔨"; TITLE="Đang biên dịch ROM"
+              HINT="Đang chạy build.sh"
+              ;;
+            pack)
+              PCT=78; ICON="📦"; TITLE="Đang đóng gói"
+              HINT="Đang chạy packROM.sh"
+              ;;
+            upload)
+              PCT=94; ICON="☁️"; TITLE="Đang tải lên Gofile"
+              HINT="Upload file ROM…"
+              ;;
+            success)
+              PCT=100; ICON="✅"; TITLE="Hoàn tất"
+              HINT="ROM đã sẵn sàng để tải về."
+              ;;
+            fail)
+              PCT=0; ICON="❌"; TITLE="Build thất bại"
+              HINT="Pipeline dừng. Mở log GitHub Actions để xem lỗi."
+              ;;
+            *)
+              PCT=0; ICON="ℹ️"; TITLE="$(html_esc "$STATUS_CODE")"
+              HINT=""
+              ;;
           esac
 
-          TEXT="👾 TIẾN TRÌNH BUILD ROM
-          ━━━━━━━━━━━━━━━━━━
-          👤 Người thực hiện: iabi
-          🛠 Phiên bản: ${VERSION_TOOL}
-          📱 Device: ${DEVICE_NAME}
-          📍 Codename: ${DEVICE_CODE}
-          💿 Hệ điều hành: ${OS_VER}
-          ━━━━━━━━━━━━━━━━━━
-          📈 Tiến trình: ${PROGRESS}
-          🆔 Build ID: ${BUILD_ID}
-          🔗 Base ROM (Nguồn): <a href='${ROM_URL}'>Link</a>"
-
-          DATA_ARGS=(
-              -d chat_id="${TELEGRAM_CHAT_ID}"
-              -d parse_mode="HTML"
-              -d disable_web_page_preview="true"
-              --data-urlencode "text=${TEXT}"
-          )
-
-          if [[ "$STATUS_CODE" == "success" && -n "$DL_URL" ]]; then
-              KEYBOARD=$(jq -nc --arg dl "$DL_URL" '{inline_keyboard:[[{text:"⬇️ Tải ROM (Gofile.io)",url:$dl}]]}')
-              DATA_ARGS+=(--data-urlencode "reply_markup=${KEYBOARD}")
+          TIME_VN=$(TZ=Asia/Ho_Chi_Minh date '+%H:%M · %d/%m/%Y')
+          RUN_URL=""
+          if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
+            RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           fi
 
-          if [[ -n "$TELEGRAM_MSG_ID" && "$STATUS_CODE" != "success" ]]; then
-              curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText" \
-                  -d message_id="${TELEGRAM_MSG_ID}" "${DATA_ARGS[@]}" > /dev/null
+          DEVICE_NAME_E=$(html_esc "$DEVICE_NAME")
+          DEVICE_CODE_E=$(html_esc "$DEVICE_CODE")
+          OS_VER_E=$(html_esc "$OS_VER")
+          VERSION_E=$(html_esc "$VERSION_TOOL")
+          BUILD_ID_E=$(html_esc "$BUILD_ID")
+          BUILDER_E=$(html_esc "iabi")
+          HINT_E=$(html_esc "$HINT")
+          TITLE_E="$TITLE"
+          ROM_HREF=$(html_esc "$ROM_URL")
+          DL_HREF=$(html_esc "$DL_URL")
+          RUN_HREF=$(html_esc "$RUN_URL")
+          BAR=$(bar_for "$PCT")
+          NL=$'\n'
+
+          if [[ -n "$DEVICE_PENDING" && "$STATUS_CODE" == "start" ]]; then
+            DEVICE_BLOCK="Đang nhận diện thiết bị…"
           else
-              RES=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" "${DATA_ARGS[@]}")
-              NEW_ID=$(echo "$RES" | jq -r '.result.message_id // empty')
-              if [[ -n "$NEW_ID" && "$STATUS_CODE" != "success" ]]; then
-                  echo "TELEGRAM_MSG_ID=${NEW_ID}" >> $GITHUB_ENV
-              fi
+            DEVICE_BLOCK="<b>${DEVICE_NAME_E}</b>${NL}<code>${DEVICE_CODE_E}</code>  ·  ${OS_VER_E}"
+          fi
+
+          if [[ "$STATUS_CODE" == "fail" ]]; then
+            PROGRESS_BLOCK=""
+          else
+            PROGRESS_BLOCK="<code>${BAR}  ${PCT}%</code>${NL}"
+          fi
+
+          LINKS=""
+          if [[ -n "$ROM_URL" ]]; then
+            LINKS="🔗 <a href=\"${ROM_HREF}\">Nguồn ROM</a>"
+          fi
+          if [[ -n "$RUN_URL" ]]; then
+            if [[ -n "$LINKS" ]]; then
+              LINKS="${LINKS}  ·  📋 <a href=\"${RUN_HREF}\">Log Actions</a>"
+            else
+              LINKS="📋 <a href=\"${RUN_HREF}\">Log Actions</a>"
+            fi
+          fi
+
+          TEXT=$(printf '%s\n' \
+            "<b>NothingsVN</b> · ROM Builder" \
+            "" \
+            "<blockquote>${DEVICE_BLOCK}</blockquote>" \
+            "" \
+            "${ICON} <b>${TITLE_E}</b>" \
+            "${PROGRESS_BLOCK}<i>${HINT_E}</i>" \
+            "" \
+            "${BUILDER_E}  ·  ${VERSION_E}" \
+            "🆔 <code>${BUILD_ID_E}</code>  ·  🕐 ${TIME_VN}" \
+            "${LINKS}")
+
+          tg_post() {
+            local method="$1"; shift
+            curl -sS --max-time 20 -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}" \
+              "$@" || true
+          }
+
+          DATA_COMMON=(
+            -d "chat_id=${TELEGRAM_CHAT_ID}"
+            -d "parse_mode=HTML"
+            -d "disable_web_page_preview=true"
+            --data-urlencode "text=${TEXT}"
+          )
+
+          KEYBOARD=""
+          if [[ "$STATUS_CODE" == "success" && -n "$DL_URL" ]]; then
+            KEYBOARD=$(jq -nc --arg dl "$DL_URL" '{inline_keyboard:[[{text:"Tải ROM — Gofile.io",url:$dl}]]}')
+          elif [[ "$STATUS_CODE" == "fail" && -n "$RUN_URL" ]]; then
+            KEYBOARD=$(jq -nc --arg u "$RUN_URL" '{inline_keyboard:[[{text:"Mở log GitHub Actions",url:$u}]]}')
+          fi
+
+          send_new() {
+            local extra=()
+            if [[ -n "${KEYBOARD:-}" ]]; then
+              extra+=(--data-urlencode "reply_markup=${KEYBOARD}")
+            fi
+            local res new_id
+            res=$(tg_post sendMessage "${DATA_COMMON[@]}" "${extra[@]}")
+            new_id=$(printf '%s' "$res" | jq -r '.result.message_id // empty')
+            if [[ -n "$new_id" && "$STATUS_CODE" != "success" ]]; then
+              echo "TELEGRAM_MSG_ID=${new_id}" >> "${GITHUB_ENV:-/dev/null}"
+            fi
+          }
+
+          edit_existing() {
+            local res ok
+            res=$(tg_post editMessageText \
+              -d "message_id=${TELEGRAM_MSG_ID}" \
+              "${DATA_COMMON[@]}")
+            ok=$(printf '%s' "$res" | jq -r '.ok // false')
+            [[ "$ok" == "true" ]]
+          }
+
+          if [[ "$STATUS_CODE" == "success" ]]; then
+            if [[ -n "${TELEGRAM_MSG_ID:-}" ]]; then
+              edit_existing || true
+            fi
+            send_new
+          elif [[ -n "${TELEGRAM_MSG_ID:-}" ]] && edit_existing; then
+            :
+          else
+            send_new
           fi
           EOF
           chmod +x ./tg_send.sh
@@ -165,3 +289,4 @@ jobs:
           if [ -f "./tg_send.sh" ]; then
             ./tg_send.sh "fail" "${{ inputs.input_url }}"
           fi
+          
