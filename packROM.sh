@@ -2,7 +2,7 @@
 work_dir=$(pwd)
 source $work_dir/functions.sh 2>/dev/null || true
 
-# Sửa lỗi dính dòng PATH
+# Thiết lập đường dẫn công cụ
 tools_dir="${work_dir}/bin/$(uname)/$(uname -m)"
 export PATH="${tools_dir}:$PATH"
 
@@ -30,14 +30,14 @@ else
     os_type="HyperOS"
 fi
 
-# 1. Generate Super.img
+# 1. Đóng gói các phân vùng con thành .img
 superSize=$(bash $work_dir/bin/getSuperSize.sh $getvar 2>/dev/null || echo "9126805504")
 repack "Super image size: ${superSize}"
 repack "Packing sub-partitions into img..."
 
 for pname in ${super_list}; do
     if [ -d "$work_dir/build/baserom/images/$pname" ]; then
-        thisSize=$(du -sb $work_dir/build/baserom/images/${pname} | awk '{print $1}')
+        thisSize=$(du -sb "$work_dir/build/baserom/images/${pname}" | awk '{print $1}')
         if [[ $androidVER == "12" ]]; then
            case $pname in
              odm) addSize=104217728 ;;
@@ -61,13 +61,13 @@ for pname in ${super_list}; do
          
         thisSize=$(echo "$thisSize + $addSize" | bc)
         if [[ "$PACK_TYPE" == "EXT" ]]; then
-            python3 $work_dir/bin/fspatch.py $work_dir/build/baserom/images/${pname} $work_dir/build/baserom/images/config/${pname}_fs_config >/dev/null 2>&1
-            python3 $work_dir/bin/contextpatch.py $work_dir/build/baserom/images/${pname} $work_dir/build/baserom/images/config/${pname}_file_contexts >/dev/null 2>&1
-            make_ext4fs -J -T $(date +%s) -S $work_dir/build/baserom/images/config/${pname}_file_contexts -l $thisSize -C $work_dir/build/baserom/images/config/${pname}_fs_config -L ${pname} -a ${pname} $work_dir/build/baserom/images/${pname}.img $work_dir/build/baserom/images/${pname} >/dev/null 2>&1
+            python3 "$work_dir/bin/fspatch.py" "$work_dir/build/baserom/images/${pname}" "$work_dir/build/baserom/images/config/${pname}_fs_config" >/dev/null 2>&1
+            python3 "$work_dir/bin/contextpatch.py" "$work_dir/build/baserom/images/${pname}" "$work_dir/build/baserom/images/config/${pname}_file_contexts" >/dev/null 2>&1
+            make_ext4fs -J -T $(date +%s) -S "$work_dir/build/baserom/images/config/${pname}_file_contexts" -l $thisSize -C "$work_dir/build/baserom/images/config/${pname}_fs_config" -L ${pname} -a ${pname} "$work_dir/build/baserom/images/${pname}.img" "$work_dir/build/baserom/images/${pname}" >/dev/null 2>&1
         else
-            python3 $work_dir/bin/fspatch.py $work_dir/build/baserom/images/${pname} $work_dir/build/baserom/images/config/${pname}_fs_config >/dev/null 2>&1
-            python3 $work_dir/bin/contextpatch.py $work_dir/build/baserom/images/${pname} $work_dir/build/baserom/images/config/${pname}_file_contexts >/dev/null 2>&1
-            mkfs.erofs --quiet -zlz4hc,9 --mount-point ${pname} --fs-config-file=$work_dir/build/baserom/images/config/${pname}_fs_config --file-contexts=$work_dir/build/baserom/images/config/${pname}_file_contexts $work_dir/build/baserom/images/${pname}.img $work_dir/build/baserom/images/${pname} >/dev/null 2>&1
+            python3 "$work_dir/bin/fspatch.py" "$work_dir/build/baserom/images/${pname}" "$work_dir/build/baserom/images/config/${pname}_fs_config" >/dev/null 2>&1
+            python3 "$work_dir/bin/contextpatch.py" "$work_dir/build/baserom/images/${pname}" "$work_dir/build/baserom/images/config/${pname}_file_contexts" >/dev/null 2>&1
+            mkfs.erofs --quiet -zlz4hc,9 --mount-point ${pname} --fs-config-file="$work_dir/build/baserom/images/config/${pname}_fs_config" --file-contexts="$work_dir/build/baserom/images/config/${pname}_file_contexts" "$work_dir/build/baserom/images/${pname}.img" "$work_dir/build/baserom/images/${pname}" >/dev/null 2>&1
         fi
 
         if [ -f "$work_dir/build/baserom/images/${pname}.img" ]; then
@@ -78,7 +78,7 @@ for pname in ${super_list}; do
     fi
 done
 
-if grep -q "ro.build.ab_update=true" $work_dir/build/baserom/images/vendor/build.prop 2>/dev/null; then
+if grep -q "ro.build.ab_update=true" "$work_dir/build/baserom/images/vendor/build.prop" 2>/dev/null; then
     is_ab_device=true
 else
     is_ab_device=false
@@ -90,7 +90,8 @@ if [[ "$is_ab_device" == false ]]; then
     lpargs="-F --output $work_dir/build/baserom/images/super.img --metadata-size 65536 --super-name super --metadata-slots 2 --block-size 4096 --device super:$superSize --group=qti_dynamic_partitions:$superSize"
     for pname in odm mi_ext system system_ext product vendor; do
         if [ -f "$work_dir/build/baserom/images/${pname}.img" ]; then
-            subsize=$(du -sb $work_dir/build/baserom/images/${pname}.img | tr -cd 0-9)
+            subsize=$(du -sb "$work_dir/build/baserom/images/${pname}.img" | tr -cd 0-9)
+            repack "Super sub-partition [$pname] size: [$subsize]"
             args="--partition ${pname}:none:${subsize}:qti_dynamic_partitions --image ${pname}=$work_dir/build/baserom/images/${pname}.img"
             lpargs="$lpargs $args"
         fi
@@ -100,7 +101,8 @@ else
     lpargs="-F --virtual-ab --output $work_dir/build/baserom/images/super.img --metadata-size 65536 --super-name super --metadata-slots 3 --device super:$superSize --group=qti_dynamic_partitions_a:$superSize --group=qti_dynamic_partitions_b:$superSize"
     for pname in ${super_list}; do
         if [ -f "$work_dir/build/baserom/images/${pname}.img" ]; then
-            subsize=$(du -sb $work_dir/build/baserom/images/${pname}.img | awk '{print $1}')
+            subsize=$(du -sb "$work_dir/build/baserom/images/${pname}.img" | awk '{print $1}')
+            repack "Super sub-partition [$pname] size: [$subsize]"
             args="--partition ${pname}_a:none:${subsize}:qti_dynamic_partitions_a --image ${pname}_a=$work_dir/build/baserom/images/${pname}.img --partition ${pname}_b:none:0:qti_dynamic_partitions_b"
             lpargs="$lpargs $args"
         fi
@@ -115,27 +117,28 @@ else
     exit 1
 fi
 
-# Xóa các file .img phân vùng con để giải phóng bộ nhớ
+# 3. Dọn dẹp sạch cả file .img con LẪN thư mục giải nén (tránh lỗi symlink & permission khi nén zip)
+repack "Cleaning up temporary sub-partition files and folders..."
 for pname in ${super_list}; do
-    rm -rf $work_dir/build/baserom/images/${pname}.img
+    rm -rf "$work_dir/build/baserom/images/${pname}.img"
+    rm -rf "$work_dir/build/baserom/images/${pname}"
 done
+rm -rf "$work_dir/build/baserom/images/config"
 
-# 3. ĐÓNG GÓI THÀNH FILE ROM ZIP HOÀN CHỈNH VÀO THƯ MỤC out/
+# 4. Đóng gói thành file ROM .zip vào thư mục out/
 repack "Preparing flashable zip package..."
 mkdir -p "$work_dir/out"
 
-# Chuẩn bị cấu trúc ROM zip (chép META-INF, script flash nếu có)
 if [ -d "$work_dir/bin/script2flash" ]; then
-    cp -r $work_dir/bin/script2flash/* "$work_dir/build/baserom/" 2>/dev/null || true
+    cp -rf "$work_dir/bin/script2flash/"* "$work_dir/build/baserom/" 2>/dev/null || true
 fi
 
-# Đặt tên file ROM chuẩn
 ZIP_NAME="BugOS_${device_code}_${base_rom_code}_$(date +%Y%m%d).zip"
 repack "Compressing ROM package into: out/${ZIP_NAME}"
 
 cd "$work_dir/build/baserom"
 
-# Ưu tiên dùng 7z nếu có, nếu không thì dùng zip
+# Nén gói ROM hoàn chỉnh
 if command -v 7z >/dev/null 2>&1; then
     7z a -tzip -mx=1 "$work_dir/out/${ZIP_NAME}" ./* >/dev/null
 else
@@ -148,7 +151,7 @@ if [ -f "$work_dir/out/${ZIP_NAME}" ]; then
     echo "========================================="
     echo "✅ ROM ZIP PACKED SUCCESSFULLY:"
     echo "Path: $work_dir/out/${ZIP_NAME}"
-    echo "Size: $(du -sh $work_dir/out/${ZIP_NAME} | awk '{print $1}')"
+    echo "Size: $(du -sh "$work_dir/out/${ZIP_NAME}" | awk '{print $1}')"
     echo "========================================="
 else
     echo "❌ Pack ROM Zip thất bại!"
