@@ -32,6 +32,11 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
 
+      # Fix triệt để lỗi Read-only file system
+      - name: Fix Filesystem Permissions
+        run: |
+          sudo mount -o remount,rw / 2>/dev/null || true
+
       - name: Set up Time
         run: |
           echo "Setting Vietnam timezone"
@@ -46,15 +51,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@main
 
+      - name: Fix Workspace & Set Executable
+        run: |
+          sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+          chmod +x *.sh 2>/dev/null || true
+          chmod +x bin/ -R 2>/dev/null || true
+
       - name: Install Stuff
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
           sudo bash setup.sh
-
-      - name: Giving permission
-        run: |
-          sudo chmod 777 -R *
 
       - name: Setup Telegram Notify Helper
         run: |
@@ -67,7 +74,7 @@ jobs:
           DL_URL="${3:-}"
 
           html_esc() {
-            printf '%s' "${1:-}" | sed -e 's/&/\&/g' -e 's/</\</g' -e 's/>/\>/g' -e 's/"/\"/g'
+            printf '%s' "${1:-}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
           }
 
           bar_for() {
@@ -218,7 +225,7 @@ jobs:
 
           KEYBOARD=""
           if [[ "$STATUS_CODE" == "success" && -n "$DL_URL" ]]; then
-            KEYBOARD=$(jq -nc --arg dl "$DL_URL" '{inline_keyboard:[[{text:"Tải ROM — Gofile.io",url:$dl}]]}')
+            KEYBOARD=$(jq -nc --arg dl "$DL_URL" '{inline_keyboard:[[{text:"⬇️ Tải ROM (Gofile.io)",url:$dl}]]}')
           elif [[ "$STATUS_CODE" == "fail" && -n "$RUN_URL" ]]; then
             KEYBOARD=$(jq -nc --arg u "$RUN_URL" '{inline_keyboard:[[{text:"Mở log GitHub Actions",url:$u}]]}')
           fi
